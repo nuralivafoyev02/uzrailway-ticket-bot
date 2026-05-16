@@ -10,6 +10,7 @@ Telegram bot for checking Uzbekistan Railway ticket availability and monitoring 
 - Paginates long Telegram results with next/back buttons
 - Save route monitoring and notify user when seats appear
 - Admin `/message` broadcast command with Telegram formatting preservation
+- Admin `/stats` command for quick operational health metrics
 - Detects possible Railway site protection / captcha / block / non-JSON issues
 - Sends admin alerts on serious provider errors
 - Cloudflare Worker deployment with one-minute Cron Trigger
@@ -193,6 +194,14 @@ Admin broadcast:
 ```
 
 Admins can also reply to any message with `/message`; the bot copies that original message to all known users, preserving Telegram formatting and media.
+
+Admin stats:
+
+```txt
+/stats
+```
+
+When a watched route gets available seats, the notification includes quick buttons for booking, manual recheck, stopping the watch, pagination, and starting a new search.
 
 ## Main station codes
 

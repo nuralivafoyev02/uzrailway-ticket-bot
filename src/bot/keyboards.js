@@ -24,6 +24,24 @@ export function resultKeyboard({ page = 0, totalPages = 1 } = {}) {
   };
 }
 
+export function watchAlertKeyboard({ watchId, bookingUrl, page = 0, totalPages = 1 } = {}) {
+  const inline_keyboard = [];
+  const quickActions = [];
+  if (bookingUrl) quickActions.push({ text: '🎟 Buyurtma qilish', url: bookingUrl });
+  if (watchId) quickActions.push({ text: '🔄 Yana tekshirish', callback_data: `recheck:${watchId}` });
+  if (quickActions.length) inline_keyboard.push(quickActions);
+
+  const navigation = [];
+  if (totalPages > 1 && page > 0) navigation.push({ text: '⬅️ Ortga', callback_data: `result_page:${page - 1}` });
+  if (totalPages > 1 && page < totalPages - 1) navigation.push({ text: 'Keyingi ➡️', callback_data: `result_page:${page + 1}` });
+  if (navigation.length) inline_keyboard.push(navigation);
+
+  if (watchId) inline_keyboard.push([{ text: '❌ Kuzatuvni to‘xtatish', callback_data: `stop:${watchId}` }]);
+  inline_keyboard.push([{ text: '🎫 Yangi qidiruv', callback_data: 'new_search' }]);
+
+  return { inline_keyboard };
+}
+
 export function watchKeyboard(watches) {
   return {
     inline_keyboard: watches.map((watch) => [

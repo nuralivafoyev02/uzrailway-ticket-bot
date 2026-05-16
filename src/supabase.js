@@ -109,6 +109,69 @@ export async function dbListUserIds(limit = 10000) {
   return (data || []).map((user) => user.telegram_id).filter(Boolean);
 }
 
+export async function dbGetAdminStats() {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Supabase is not configured');
+  const todayIso = tashkentDayStartIso();
+
+  const [
+    users,
+    activeWatches,
+    stoppedWatches,
+    checkedToday,
+    notifiedToday,
+    errorsToday,
+    recentErrors
+  ] = await Promise.all([
+    supabase.from('bot_users').select('telegram_id', { count: 'exact', head: true }),
+    supabase.from('ticket_watches').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('ticket_watches').select('id', { count: 'exact', head: true }).eq('status', 'stopped'),
+    supabase.from('ticket_watches').select('id', { count: 'exact', head: true }).gte('last_checked_at', todayIso),
+    supabase.from('ticket_watches').select('id', { count: 'exact', head: true }).gte('last_notified_at', todayIso),
+    supabase.from('bot_logs').select('id', { count: 'exact', head: true }).in('level', ['ERROR', 'WARN']).gte('created_at', todayIso),
+    supabase
+      .from('bot_logs')
+      .select('level,scope,message,created_at')
+      .in('level', ['ERROR', 'WARN'])
+      .order('created_at', { ascending: false })
+      .limit(5)
+  ]);
+
+  const responses = [users, activeWatches, stoppedWatches, checkedToday, notifiedToday, errorsToday, recentErrors];
+  const failed = responses.find((response) => response.error);
+  if (failed?.error) throw failed.error;
+
+  return {
+    users: users.count || 0,
+    activeWatches: activeWatches.count || 0,
+    stoppedWatches: stoppedWatches.count || 0,
+    checkedToday: checkedToday.count || 0,
+    notifiedToday: notifiedToday.count || 0,
+    errorsToday: errorsToday.count || 0,
+    recentErrors: recentErrors.data || []
+  };
+}
+
+function tashkentDayStartIso() {
+  const offsetMs = 5 * 60 * 60 * 1000;
+  const now = new Date(Date.now() + offsetMs);
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - offsetMs).toISOString();
+}
+
+export async function dbGetWatch(id, telegramId) {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Supabase is not configured');
+  let query = supabase
+    .from('ticket_watches')
+    .select('*')
+    .eq('id', id)
+    .eq('status', 'active');
+  if (telegramId) query = query.eq('telegram_id', telegramId);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function dbStopWatch(id, telegramId) {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Supabase is not configured');

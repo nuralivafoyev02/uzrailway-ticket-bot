@@ -7,14 +7,17 @@ import {
   dbCreateWatch,
   dbListWatches,
   dbListUserIds,
+  dbGetAdminStats,
+  dbGetWatch,
   dbStopWatch,
+  dbUpdateWatchResult,
   dbLog
 } from '../supabase.js';
 import { sendMessage, sendFormattedMessage, editMessageText, copyMessage, answerCallbackQuery, notifyAdmins } from '../telegram.js';
-import { mainKeyboard, cancelKeyboard, resultKeyboard, watchKeyboard } from './keyboards.js';
+import { mainKeyboard, cancelKeyboard, resultKeyboard, watchAlertKeyboard, watchKeyboard } from './keyboards.js';
 import { resolveStation, stationsListText } from '../services/stations.js';
 import { searchTrains } from '../services/railwayClient.js';
-import { formatSearchResult, getSearchResultPageCount, formatWatchList, formatProtectionError } from '../services/formatters.js';
+import { formatSearchResult, getVisibleTrains, getSearchResultPageCount, buildBookingUrl, trainResultHash, formatWatchList, formatProtectionError } from '../services/formatters.js';
 import { parseTravelDate, formatDateUz } from '../utils/date.js';
 import { escapeHtml } from '../utils/text.js';
 
@@ -40,6 +43,12 @@ async function handleMessage(message) {
     if (!text) return sendMessage(chatId, 'Faqat matnli buyruqlarni qabul qilaman 🙂', { replyMarkup: mainKeyboard() });
     if (['/start', 'start'].includes(text.toLowerCase())) return start(chatId);
     if (['/cancel', '❌ bekor qilish'].includes(text.toLowerCase())) return cancel(chatId);
+    if (isStatsCommand(text)) {
+      if (isAdmin(user.id)) return showAdminStats(chatId);
+      return sendMessage(chatId, 'Tushunmadim 🙂 Bilet qidirish uchun pastdagi tugmani bosing yoki shunday yozing:\n\n<code>/q Toshkent|Samarqand|20.05.2026</code>', {
+        replyMarkup: mainKeyboard()
+      });
+    }
     if (isMessageCommand(text)) {
       if (isAdmin(user.id)) return broadcastMessage(chatId, message);
       return sendMessage(chatId, 'Tushunmadim 🙂 Bilet qidirish uchun pastdagi tugmani bosing yoki shunday yozing:\n\n<code>/q Toshkent|Samarqand|20.05.2026</code>', {
@@ -83,6 +92,7 @@ async function handleCallback(callback) {
     if (data === 'new_search') return beginSearch(chatId);
     if (data === 'watch_last') return createWatchFromLastSearch(chatId, userId);
     if (data.startsWith('result_page:')) return showResultPage(callback, userId, Number(data.slice('result_page:'.length)));
+    if (data.startsWith('recheck:')) return recheckWatch(callback, userId, data.slice('recheck:'.length));
     if (data.startsWith('stop:')) {
       const id = data.slice('stop:'.length);
       const stopped = await dbStopWatch(id, userId);
@@ -230,9 +240,11 @@ async function showResultPage(callback, userId, page) {
   if (!result) return sendMessage(callback.message.chat.id, 'Natija eskirgan. Iltimos, qayta qidiring 🙂', { replyMarkup: mainKeyboard() });
   const totalPages = getSearchResultPageCount(result);
   const safePage = Math.max(0, Math.min(Number.isFinite(page) ? page : 0, totalPages - 1));
-  return editMessageText(callback.message.chat.id, callback.message.message_id, formatSearchResult(result, { page: safePage }), {
-    replyMarkup: resultKeyboard({ page: safePage, totalPages })
-  });
+  const watchId = session?.payload?.lastWatchId || null;
+  const replyMarkup = watchId
+    ? watchAlertKeyboard({ watchId, bookingUrl: getFirstBookingUrl(result), page: safePage, totalPages })
+    : resultKeyboard({ page: safePage, totalPages });
+  return editMessageText(callback.message.chat.id, callback.message.message_id, formatSearchResult(result, { page: safePage }), { replyMarkup });
 }
 
 async function createWatchFromLastSearch(chatId, userId) {
@@ -259,8 +271,85 @@ function isMessageCommand(text) {
   return /^\/message(?:@\w+)?(?:\s|$)/i.test(text);
 }
 
+function isStatsCommand(text) {
+  return /^\/stats(?:@\w+)?(?:\s|$)/i.test(text);
+}
+
 function isAdmin(userId) {
   return config.adminIds.includes(String(userId));
+}
+
+async function showAdminStats(chatId) {
+  const stats = await dbGetAdminStats();
+  const recent = stats.recentErrors.length
+    ? stats.recentErrors.map((item, index) => {
+        const time = new Date(item.created_at).toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' });
+        return `${index + 1}) <code>${escapeHtml(item.level)}</code> ${escapeHtml(item.scope)} — ${escapeHtml(item.message).slice(0, 160)}\n   ${escapeHtml(time)}`;
+      }).join('\n')
+    : 'yo‘q';
+
+  return sendMessage(chatId, [
+    '📊 <b>Bot statistikasi</b>',
+    '',
+    `👤 Userlar: <b>${stats.users}</b>`,
+    `🔔 Aktiv kuzatuvlar: <b>${stats.activeWatches}</b>`,
+    `⏹ To‘xtatilgan kuzatuvlar: <b>${stats.stoppedWatches}</b>`,
+    `✅ Bugun tekshirilgan kuzatuvlar: <b>${stats.checkedToday}</b>`,
+    `📣 Bugun yuborilgan joy xabarlari: <b>${stats.notifiedToday}</b>`,
+    `⚠️ Bugungi xato/warn loglar: <b>${stats.errorsToday}</b>`,
+    '',
+    '<b>Oxirgi xatolar:</b>',
+    recent
+  ].join('\n'));
+}
+
+async function recheckWatch(callback, userId, watchId) {
+  const chatId = callback.message.chat.id;
+  const watch = await dbGetWatch(watchId, userId);
+  if (!watch) return sendMessage(chatId, 'Bu aktiv kuzatuv topilmadi yoki allaqachon to‘xtatilgan.');
+
+  await editMessageText(chatId, callback.message.message_id, [
+    '🔄 <b>Qayta tekshiryapman...</b>',
+    '',
+    `${escapeHtml(watch.from_station_name)} → ${escapeHtml(watch.to_station_name)}`,
+    `📅 ${formatDateUz(watch.travel_date)}`
+  ].join('\n')).catch(() => null);
+
+  const result = await searchTrains({
+    fromStation: { code: watch.from_station_code, name: watch.from_station_name },
+    toStation: { code: watch.to_station_code, name: watch.to_station_name },
+    travelDate: watch.travel_date
+  });
+  await dbSetSession(userId, 'idle', {
+    lastWatchId: watch.id,
+    lastSearch: {
+      fromStation: result.query.fromStation,
+      toStation: result.query.toStation,
+      travelDate: result.query.travelDate
+    },
+    lastResult: result
+  });
+  const hash = trainResultHash(result);
+  await dbUpdateWatchResult(watch.id, {
+    last_checked_at: new Date().toISOString(),
+    last_status: result.hasSeats ? `${result.totalFreeSeats} ta joy bor` : 'joy yo‘q',
+    last_result_hash: hash,
+    last_error: null
+  });
+  await dbLog('INFO', 'recheck', 'Manual watch recheck', { watchId: watch.id, telegramId: userId }).catch(() => null);
+  await editMessageText(chatId, callback.message.message_id, formatSearchResult(result, { page: 0 }), {
+    replyMarkup: watchAlertKeyboard({
+      watchId: watch.id,
+      bookingUrl: getFirstBookingUrl(result),
+      page: 0,
+      totalPages: getSearchResultPageCount(result)
+    })
+  });
+}
+
+function getFirstBookingUrl(result) {
+  const train = getVisibleTrains(result)[0] || null;
+  return train ? buildBookingUrl(result, train) : buildBookingUrl(result);
 }
 
 async function broadcastMessage(chatId, message) {
