@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 import { escapeHtml } from '../utils/text.js';
 import { formatDateUz } from '../utils/date.js';
+
+export const RESULT_PAGE_SIZE = 4;
 
 export function money(value) {
   if (!Number.isFinite(Number(value))) return 'narx ko‘rsatilmagan';
@@ -8,7 +11,7 @@ export function money(value) {
 }
 
 export function trainResultHash(result) {
-  const source = JSON.stringify((result.trains || []).map((train) => ({
+  const source = JSON.stringify(getVisibleTrains(result).map((train) => ({
     n: train.number,
     fs: train.freeSeats,
     p: train.minPrice,
@@ -17,21 +20,40 @@ export function trainResultHash(result) {
   return crypto.createHash('sha1').update(source).digest('hex');
 }
 
-export function formatSearchResult(result) {
+export function getVisibleTrains(result) {
+  const trains = result?.trains || [];
+  return trains.filter((train) => train.freeSeats > 0);
+}
+
+export function getSearchResultPageCount(result, pageSize = RESULT_PAGE_SIZE) {
+  return Math.max(1, Math.ceil(getVisibleTrains(result).length / pageSize));
+}
+
+export function formatSearchResult(result, options = {}) {
+  const page = Math.max(0, Number(options.page || 0));
+  const pageSize = Math.max(1, Number(options.pageSize || RESULT_PAGE_SIZE));
   const { fromStation, toStation, travelDate } = result.query;
+  const visibleTrains = getVisibleTrains(result);
+  const pageCount = getSearchResultPageCount(result, pageSize);
+  const safePage = Math.min(page, pageCount - 1);
+  const pageTrains = visibleTrains.slice(safePage * pageSize, safePage * pageSize + pageSize);
   const header = [
     `🚆 <b>${escapeHtml(fromStation.name)} → ${escapeHtml(toStation.name)}</b>`,
     `📅 Sana: <b>${formatDateUz(travelDate)}</b>`,
-    `🔎 Topilgan poyezdlar: <b>${result.totalTrains}</b>`,
+    `🔎 Bo‘sh joyli reyslar: <b>${visibleTrains.length}</b>`,
     `💺 Bo‘sh joylar: <b>${result.totalFreeSeats}</b>`,
-    ''
-  ];
+    pageCount > 1 ? `📄 Sahifa: <b>${safePage + 1}/${pageCount}</b>` : null
+  ].filter(Boolean);
 
   if (!result.totalTrains) {
-    return header.join('\n') + '❌ Bu sana/yo‘nalish bo‘yicha poyezd topilmadi.';
+    return `${header.join('\n')}\n\n❌ Bu sana/yo‘nalish bo‘yicha poyezd topilmadi.`;
   }
 
-  const lines = result.trains.slice(0, 12).map((train, index) => {
+  if (!visibleTrains.length) {
+    return `${header.join('\n')}\n\n❌ Hozircha bo‘sh joyli reys ko‘rinmadi.`;
+  }
+
+  const lines = pageTrains.map((train, index) => {
     const carLines = (train.cars || [])
       .filter((car) => car.freeSeats > 0)
       .slice(0, 6)
@@ -39,18 +61,28 @@ export function formatSearchResult(result) {
       .join('\n');
 
     return [
-      `<b>${index + 1}) ${escapeHtml(train.type)} ${escapeHtml(train.number)}</b>`,
+      `<b>${safePage * pageSize + index + 1}) ${escapeHtml(train.type)} ${escapeHtml(train.number)}</b>`,
       train.route ? `📍 ${escapeHtml(train.route)}` : null,
       train.departureDate ? `🕘 Jo‘nash: ${escapeHtml(train.departureDate)}` : null,
       train.arrivalDate ? `🏁 Yetib borish: ${escapeHtml(train.arrivalDate)}` : null,
       `💺 Joy: <b>${train.freeSeats > 0 ? `${train.freeSeats} ta bor ✅` : 'yo‘q ❌'}</b>`,
       train.minPrice ? `💰 Eng arzon: ${money(train.minPrice)}` : null,
+      train.freeSeats > 0 ? `🔗 <a href="${escapeHtml(buildBookingUrl(result, train))}">Buyurtma qilish va to‘lov</a>` : null,
       carLines || null
     ].filter(Boolean).join('\n');
   });
 
-  const tail = result.trains.length > 12 ? `\n\n… yana ${result.trains.length - 12} ta poyezd yashirildi.` : '';
-  return header.join('\n') + lines.join('\n\n') + tail;
+  return `${header.join('\n')}\n\n${lines.join('\n\n')}`;
+}
+
+export function buildBookingUrl(result, train = null) {
+  const { fromStation, toStation, travelDate } = result.query;
+  const url = new URL(`/${config.railway.lang}/home`, config.railway.baseUrl);
+  url.searchParams.set('from', fromStation.code);
+  url.searchParams.set('to', toStation.code);
+  url.searchParams.set('date', travelDate);
+  if (train?.number) url.searchParams.set('train', train.number);
+  return url.toString();
 }
 
 export function formatWatchList(watches) {

@@ -1,8 +1,9 @@
 import { config } from '../config.js';
-import { dbGetActiveWatches, dbUpdateWatchResult, dbLog } from '../supabase.js';
+import { dbGetActiveWatches, dbSetSession, dbUpdateWatchResult, dbLog } from '../supabase.js';
 import { sendMessage, notifyAdmins } from '../telegram.js';
 import { searchTrains } from './railwayClient.js';
-import { trainResultHash, formatSearchResult, formatProtectionError } from './formatters.js';
+import { trainResultHash, formatSearchResult, getSearchResultPageCount, formatProtectionError } from './formatters.js';
+import { resultKeyboard } from '../bot/keyboards.js';
 import { escapeHtml } from '../utils/text.js';
 import { formatDateUz } from '../utils/date.js';
 
@@ -30,7 +31,17 @@ export async function runMonitor() {
 
       if (shouldNotify) {
         summary.notified += 1;
-        await sendMessage(watch.telegram_id, `✅ <b>Joy chiqdi!</b>\n\n${formatSearchResult(result)}`);
+        await dbSetSession(watch.telegram_id, 'idle', {
+          lastSearch: {
+            fromStation: result.query.fromStation,
+            toStation: result.query.toStation,
+            travelDate: result.query.travelDate
+          },
+          lastResult: result
+        }).catch(() => null);
+        await sendMessage(watch.telegram_id, `✅ <b>Joy chiqdi!</b>\n\n${formatSearchResult(result, { page: 0 })}`, {
+          replyMarkup: resultKeyboard({ page: 0, totalPages: getSearchResultPageCount(result) })
+        });
       }
     } catch (error) {
       summary.failed += 1;

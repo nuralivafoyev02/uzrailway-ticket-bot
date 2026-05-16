@@ -97,6 +97,18 @@ export async function dbListWatches(telegramId) {
   return data || [];
 }
 
+export async function dbListUserIds(limit = 10000) {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('bot_users')
+    .select('telegram_id')
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []).map((user) => user.telegram_id).filter(Boolean);
+}
+
 export async function dbStopWatch(id, telegramId) {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Supabase is not configured');

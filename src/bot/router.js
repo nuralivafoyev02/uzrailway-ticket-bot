@@ -6,14 +6,15 @@ import {
   dbClearSession,
   dbCreateWatch,
   dbListWatches,
+  dbListUserIds,
   dbStopWatch,
   dbLog
 } from '../supabase.js';
-import { sendMessage, answerCallbackQuery, notifyAdmins } from '../telegram.js';
+import { sendMessage, sendFormattedMessage, editMessageText, copyMessage, answerCallbackQuery, notifyAdmins } from '../telegram.js';
 import { mainKeyboard, cancelKeyboard, resultKeyboard, watchKeyboard } from './keyboards.js';
 import { resolveStation, stationsListText } from '../services/stations.js';
 import { searchTrains } from '../services/railwayClient.js';
-import { formatSearchResult, formatWatchList, formatProtectionError } from '../services/formatters.js';
+import { formatSearchResult, getSearchResultPageCount, formatWatchList, formatProtectionError } from '../services/formatters.js';
 import { parseTravelDate, formatDateUz } from '../utils/date.js';
 import { escapeHtml } from '../utils/text.js';
 
@@ -39,6 +40,12 @@ async function handleMessage(message) {
     if (!text) return sendMessage(chatId, 'Faqat matnli buyruqlarni qabul qilaman 🙂', { replyMarkup: mainKeyboard() });
     if (['/start', 'start'].includes(text.toLowerCase())) return start(chatId);
     if (['/cancel', '❌ bekor qilish'].includes(text.toLowerCase())) return cancel(chatId);
+    if (isMessageCommand(text)) {
+      if (isAdmin(user.id)) return broadcastMessage(chatId, message);
+      return sendMessage(chatId, 'Tushunmadim 🙂 Bilet qidirish uchun pastdagi tugmani bosing yoki shunday yozing:\n\n<code>/q Toshkent|Samarqand|20.05.2026</code>', {
+        replyMarkup: mainKeyboard()
+      });
+    }
     if (text === '🎫 Bilet qidirish') return beginSearch(chatId);
     if (text === '🔔 Kuzatuvlarim' || text === '/my') return showWatches(chatId);
     if (text === '🚉 Stansiya kodlari' || text === '/stations') return showStations(chatId);
@@ -75,6 +82,7 @@ async function handleCallback(callback) {
     await answerCallbackQuery(callback.id).catch(() => null);
     if (data === 'new_search') return beginSearch(chatId);
     if (data === 'watch_last') return createWatchFromLastSearch(chatId, userId);
+    if (data.startsWith('result_page:')) return showResultPage(callback, userId, Number(data.slice('result_page:'.length)));
     if (data.startsWith('stop:')) {
       const id = data.slice('stop:'.length);
       const stopped = await dbStopWatch(id, userId);
@@ -96,7 +104,6 @@ async function start(chatId) {
     'Nimalar qila olaman:',
     '🎫 yo‘nalish va sana bo‘yicha bilet qidirish',
     '🔔 joy chiqsa Telegram orqali xabar berish',
-    '🛡 sayt himoyasi yoki reCAPTCHA chiqsa adminlarga xabar yuborish',
     '',
     'Boshlash uchun <b>🎫 Bilet qidirish</b> tugmasini bosing.'
   ].join('\n'), { replyMarkup: mainKeyboard() });
@@ -206,8 +213,26 @@ async function performSearch(chatId, userId, parsed) {
   await sendMessage(chatId, `🔎 Qidiryapman: <b>${escapeHtml(fromStation.name)} → ${escapeHtml(toStation.name)}</b>, ${formatDateUz(travelDate)}...`);
 
   const result = await searchTrains({ fromStation, toStation, travelDate });
-  await dbSetSession(userId, 'idle', { lastSearch: { fromStation, toStation, travelDate } });
-  return sendMessage(chatId, formatSearchResult(result), { replyMarkup: resultKeyboard() });
+  await dbSetSession(userId, 'idle', { lastSearch: { fromStation, toStation, travelDate }, lastResult: result });
+  return sendResultPage(chatId, result, 0);
+}
+
+async function sendResultPage(chatId, result, page) {
+  const totalPages = getSearchResultPageCount(result);
+  return sendMessage(chatId, formatSearchResult(result, { page }), {
+    replyMarkup: resultKeyboard({ page, totalPages })
+  });
+}
+
+async function showResultPage(callback, userId, page) {
+  const session = await dbGetSession(userId);
+  const result = session?.payload?.lastResult;
+  if (!result) return sendMessage(callback.message.chat.id, 'Natija eskirgan. Iltimos, qayta qidiring 🙂', { replyMarkup: mainKeyboard() });
+  const totalPages = getSearchResultPageCount(result);
+  const safePage = Math.max(0, Math.min(Number.isFinite(page) ? page : 0, totalPages - 1));
+  return editMessageText(callback.message.chat.id, callback.message.message_id, formatSearchResult(result, { page: safePage }), {
+    replyMarkup: resultKeyboard({ page: safePage, totalPages })
+  });
 }
 
 async function createWatchFromLastSearch(chatId, userId) {
@@ -230,6 +255,88 @@ async function showWatches(chatId) {
   });
 }
 
+function isMessageCommand(text) {
+  return /^\/message(?:@\w+)?(?:\s|$)/i.test(text);
+}
+
+function isAdmin(userId) {
+  return config.adminIds.includes(String(userId));
+}
+
+async function broadcastMessage(chatId, message) {
+  const users = await dbListUserIds();
+  if (!users.length) return sendMessage(chatId, 'Hozircha yuborish uchun foydalanuvchi topilmadi.');
+
+  const replied = message.reply_to_message;
+  const commandText = extractMessageCommandText(message);
+  if (!replied && !commandText.text) {
+    return sendMessage(chatId, [
+      'Admin xabar yuborish:',
+      '',
+      '<code>/message matn</code>',
+      '',
+      'Yoki yuboriladigan xabarga reply qilib <code>/message</code> yozing.'
+    ].join('\n'));
+  }
+
+  await sendMessage(chatId, `📨 Xabar yuborish boshlandi. Foydalanuvchilar: <b>${users.length}</b>`);
+  const summary = { sent: 0, failed: 0 };
+  await mapConcurrent(users, 8, async (telegramId) => {
+    try {
+      if (replied) {
+        await copyMessage(telegramId, chatId, replied.message_id);
+      } else {
+        await sendFormattedMessage(telegramId, commandText.text, {
+          entities: commandText.entities,
+          disableWebPagePreview: false
+        });
+      }
+      summary.sent += 1;
+    } catch (error) {
+      summary.failed += 1;
+      await dbLog('WARN', 'broadcast', error.message, { telegramId, code: error.code, response: error.response }).catch(() => null);
+    }
+  });
+
+  return sendMessage(chatId, `✅ Broadcast tugadi.\n\nYuborildi: <b>${summary.sent}</b>\nXato: <b>${summary.failed}</b>`);
+}
+
+function extractMessageCommandText(message) {
+  const text = message.text || '';
+  const match = text.match(/^\/message(?:@\w+)?\s*/i);
+  const start = match ? match[0].length : 0;
+  const body = text.slice(start).trimStart();
+  const trimShift = text.slice(start).length - body.length;
+  const offset = start + trimShift;
+  const entities = shiftEntities(message.entities || [], offset, body.length);
+  return { text: body, entities };
+}
+
+function shiftEntities(entities, offset, textLength) {
+  return entities
+    .map((entity) => {
+      const start = entity.offset;
+      const end = entity.offset + entity.length;
+      if (end <= offset || start >= offset + textLength) return null;
+      const nextStart = Math.max(start, offset) - offset;
+      const nextEnd = Math.min(end, offset + textLength) - offset;
+      return { ...entity, offset: nextStart, length: nextEnd - nextStart };
+    })
+    .filter((entity) => entity && entity.length > 0);
+}
+
+async function mapConcurrent(items, concurrency, mapper) {
+  let index = 0;
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, items.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (index < items.length) {
+      const item = items[index];
+      index += 1;
+      await mapper(item);
+    }
+  }));
+}
+
 async function handleBotError(chatId, error, scope) {
   await dbLog('ERROR', scope, error.message, { code: error.code, status: error.status, details: error.details }).catch(() => null);
 
@@ -238,9 +345,7 @@ async function handleBotError(chatId, error, scope) {
     return sendMessage(chatId, [
       '🛡 Railway saytida himoya yoki reCAPTCHA/blok holati sezildi.',
       '',
-      'Men buni adminga yubordim. Keyingi urinishda yana tekshiraman.',
-      '',
-      'Kod: <code>RAILWAY_PROTECTION</code>'
+      'Keyingi urinishda yana tekshiraman.'
     ].join('\n'), { replyMarkup: mainKeyboard() });
   }
 
@@ -248,6 +353,6 @@ async function handleBotError(chatId, error, scope) {
   return sendMessage(chatId, [
     '⚠️ Hozir tekshiruvda vaqtinchalik xatolik chiqdi.',
     '',
-    'Men to‘xtab qolmadim: adminlarga xabar yubordim va keyingi urinishda yana ishlayman. Iltimos, birozdan keyin qayta urinib ko‘ring.'
+    'Men to‘xtab qolmadim va keyingi urinishda yana ishlayman. Iltimos, birozdan keyin qayta urinib ko‘ring.'
   ].join('\n'), { replyMarkup: mainKeyboard() });
 }

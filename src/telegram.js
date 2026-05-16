@@ -35,6 +35,16 @@ export async function sendMessage(chatId, text, options = {}) {
   return result;
 }
 
+export async function sendFormattedMessage(chatId, text, options = {}) {
+  return telegram('sendMessage', {
+    chat_id: chatId,
+    text,
+    entities: options.entities,
+    disable_web_page_preview: options.disableWebPagePreview ?? true,
+    reply_markup: options.replyMarkup
+  });
+}
+
 export async function editMessageText(chatId, messageId, text, options = {}) {
   return telegram('editMessageText', {
     chat_id: chatId,
@@ -42,6 +52,15 @@ export async function editMessageText(chatId, messageId, text, options = {}) {
     text,
     parse_mode: options.parseMode || 'HTML',
     disable_web_page_preview: true,
+    reply_markup: options.replyMarkup
+  });
+}
+
+export async function copyMessage(chatId, fromChatId, messageId, options = {}) {
+  return telegram('copyMessage', {
+    chat_id: chatId,
+    from_chat_id: fromChatId,
+    message_id: messageId,
     reply_markup: options.replyMarkup
   });
 }

@@ -9,12 +9,18 @@ export function mainKeyboard() {
   };
 }
 
-export function resultKeyboard() {
+export function resultKeyboard({ page = 0, totalPages = 1 } = {}) {
+  const navigation = [];
+  if (totalPages > 1 && page > 0) navigation.push({ text: '⬅️ Ortga', callback_data: `result_page:${page - 1}` });
+  if (totalPages > 1 && page < totalPages - 1) navigation.push({ text: 'Keyingi ➡️', callback_data: `result_page:${page + 1}` });
+
+  const inline_keyboard = [];
+  if (navigation.length) inline_keyboard.push(navigation);
+  inline_keyboard.push([{ text: '🔔 Shu yo‘nalishni kuzatish', callback_data: 'watch_last' }]);
+  inline_keyboard.push([{ text: '🎫 Yangi qidiruv', callback_data: 'new_search' }]);
+
   return {
-    inline_keyboard: [
-      [{ text: '🔔 Shu yo‘nalishni kuzatish', callback_data: 'watch_last' }],
-      [{ text: '🎫 Yangi qidiruv', callback_data: 'new_search' }]
-    ]
+    inline_keyboard
   };
 }
 
