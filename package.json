@@ -4,17 +4,13 @@
   "description": "Telegram bot for checking Uzbekistan Railway ticket availability and monitoring seats.",
   "type": "module",
   "scripts": {
-    "dev": "vercel dev",
     "check": "node --check api/bot.js && node --check api/cron.js && node --check api/setWebhook.js && node --check api/health.js",
-    "deploy": "vercel --prod"
+    "start": "node -e \"console.log('Use Vercel /api serverless functions.')\""
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4"
-  },
-  "devDependencies": {
-    "vercel": "^41.7.0"
   }
 }
