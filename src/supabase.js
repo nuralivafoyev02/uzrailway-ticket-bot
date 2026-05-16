@@ -114,11 +114,12 @@ export async function dbStopWatch(id, telegramId) {
 export async function dbGetActiveWatches(limit = 20) {
   const supabase = getSupabase();
   if (!supabase) return [];
+  const staleBefore = new Date(Date.now() - config.watchIntervalSeconds * 1000).toISOString();
   const { data, error } = await supabase
     .from('ticket_watches')
     .select('*')
     .eq('status', 'active')
-    .or('last_checked_at.is.null,last_checked_at.lt.' + new Date(Date.now() - 4 * 60 * 1000).toISOString())
+    .or('last_checked_at.is.null,last_checked_at.lt.' + staleBefore)
     .order('last_checked_at', { ascending: true, nullsFirst: true })
     .limit(limit);
   if (error) throw error;

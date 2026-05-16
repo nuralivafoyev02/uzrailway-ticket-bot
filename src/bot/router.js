@@ -18,7 +18,7 @@ import { parseTravelDate, formatDateUz } from '../utils/date.js';
 import { escapeHtml } from '../utils/text.js';
 
 export async function handleUpdate(update) {
-  const missing = assertBaseEnv();
+  const missing = assertBaseEnv({ appUrl: false });
   if (missing.length) {
     const chatId = update?.message?.chat?.id || update?.callback_query?.message?.chat?.id;
     if (chatId) await sendMessage(chatId, `⚙️ Bot sozlamalari to‘liq emas: <code>${missing.join(', ')}</code>`);
@@ -33,9 +33,9 @@ async function handleMessage(message) {
   const chatId = message.chat.id;
   const user = message.from;
   const text = (message.text || '').trim();
-  await dbUpsertUser(user);
 
   try {
+    await dbUpsertUser(user);
     if (!text) return sendMessage(chatId, 'Faqat matnli buyruqlarni qabul qilaman 🙂', { replyMarkup: mainKeyboard() });
     if (['/start', 'start'].includes(text.toLowerCase())) return start(chatId);
     if (['/cancel', '❌ bekor qilish'].includes(text.toLowerCase())) return cancel(chatId);
@@ -69,10 +69,10 @@ async function handleCallback(callback) {
   const chatId = callback.message.chat.id;
   const userId = callback.from.id;
   const data = callback.data || '';
-  await dbUpsertUser(callback.from);
-  await answerCallbackQuery(callback.id).catch(() => null);
 
   try {
+    await dbUpsertUser(callback.from);
+    await answerCallbackQuery(callback.id).catch(() => null);
     if (data === 'new_search') return beginSearch(chatId);
     if (data === 'watch_last') return createWatchFromLastSearch(chatId, userId);
     if (data.startsWith('stop:')) {
@@ -245,5 +245,9 @@ async function handleBotError(chatId, error, scope) {
   }
 
   await notifyAdmins(`⚠️ <b>Bot xatoligi</b>\nScope: <code>${escapeHtml(scope)}</code>\nError: <code>${escapeHtml(error.message)}</code>`);
-  return sendMessage(chatId, '⚠️ Xatolik yuz berdi. Adminlarga xabar yuborildi, keyinroq qayta urinib ko‘ring.', { replyMarkup: mainKeyboard() });
+  return sendMessage(chatId, [
+    '⚠️ Hozir tekshiruvda vaqtinchalik xatolik chiqdi.',
+    '',
+    'Men to‘xtab qolmadim: adminlarga xabar yubordim va keyingi urinishda yana ishlayman. Iltimos, birozdan keyin qayta urinib ko‘ring.'
+  ].join('\n'), { replyMarkup: mainKeyboard() });
 }

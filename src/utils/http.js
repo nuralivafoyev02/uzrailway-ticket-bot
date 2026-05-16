@@ -33,6 +33,16 @@ export async function fetchWithTimeout(url, options = {}) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new AppError(`Request timed out after ${timeoutMs}ms`, {
+        code: 'HTTP_TIMEOUT',
+        status: 504,
+        details: { url: String(url), timeoutMs },
+        cause: error
+      });
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

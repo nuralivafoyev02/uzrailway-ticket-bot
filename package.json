@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "check": "node --check api/bot.js && node --check api/cron.js && node --check api/setWebhook.js && node --check api/health.js",
+    "check:worker": "node --check worker.js",
+    "cf:dev": "npx wrangler dev --test-scheduled",
+    "cf:deploy": "npx wrangler deploy --keep-vars",
     "start": "node -e \"console.log('Use Vercel /api serverless functions.')\""
   },
   "engines": {
@@ -12,5 +15,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4"
+  },
+  "devDependencies": {
+    "wrangler": "^4.92.0"
   }
 }

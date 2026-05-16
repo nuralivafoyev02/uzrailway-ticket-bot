@@ -3,6 +3,9 @@ import { config } from '../config.js';
 import { fetchWithTimeout, AppError } from '../utils/http.js';
 
 const API_PATH = '/api/v3/handbook/trains/list';
+const XSRF_CACHE_MS = 10 * 60 * 1000;
+
+let xsrfCache = { cookies: null, expiresAt: 0, inFlight: null };
 
 function parseSetCookie(setCookieHeader) {
   const cookie = {};
@@ -23,7 +26,24 @@ function cookieHeader(cookies) {
     .join('; ');
 }
 
-async function getXsrfCookies() {
+async function getXsrfCookies({ force = false } = {}) {
+  if (!force && xsrfCache.cookies && xsrfCache.expiresAt > Date.now()) return xsrfCache.cookies;
+  if (!force && xsrfCache.inFlight) return xsrfCache.inFlight;
+
+  xsrfCache.inFlight = fetchXsrfCookies()
+    .then((cookies) => {
+      xsrfCache = { cookies, expiresAt: Date.now() + XSRF_CACHE_MS, inFlight: null };
+      return cookies;
+    })
+    .catch((error) => {
+      xsrfCache.inFlight = null;
+      throw error;
+    });
+
+  return xsrfCache.inFlight;
+}
+
+async function fetchXsrfCookies() {
   const url = `${config.railway.baseUrl}/${config.railway.lang}/home`;
   const response = await fetchWithTimeout(url, {
     method: 'GET',
@@ -45,7 +65,7 @@ async function getXsrfCookies() {
 
 function detectProtection(status, contentType, raw) {
   const text = String(raw || '').slice(0, 3000).toLowerCase();
-  if ([401, 403, 419, 429, 503].includes(status)) return true;
+  if ([401, 403, 429, 503].includes(status)) return true;
   if (contentType.includes('text/html') && /captcha|recaptcha|cloudflare|turnstile|verify|access denied|forbidden|ddos|robot/.test(text)) return true;
   if (/captcha|recaptcha|cloudflare|turnstile|robot/.test(text)) return true;
   return false;
@@ -55,18 +75,20 @@ export async function searchTrains({ fromStation, toStation, travelDate }) {
   let lastError = null;
   for (let attempt = 0; attempt <= config.railway.retries; attempt += 1) {
     try {
-      return await searchTrainsOnce({ fromStation, toStation, travelDate });
+      return await searchTrainsOnce({ fromStation, toStation, travelDate, forceFreshCookies: attempt > 0 });
     } catch (error) {
       lastError = error;
       if (error.code === 'RAILWAY_PROTECTION') throw error;
-      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      if (attempt < config.railway.retries) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
     }
   }
   throw lastError;
 }
 
-async function searchTrainsOnce({ fromStation, toStation, travelDate }) {
-  const cookies = await getXsrfCookies();
+async function searchTrainsOnce({ fromStation, toStation, travelDate, forceFreshCookies = false }) {
+  const cookies = await getXsrfCookies({ force: forceFreshCookies });
   const url = `${config.railway.baseUrl}${API_PATH}`;
   const body = {
     directions: {

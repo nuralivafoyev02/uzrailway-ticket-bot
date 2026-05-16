@@ -9,6 +9,7 @@ Telegram bot for checking Uzbekistan Railway ticket availability and monitoring 
 - Save route monitoring and notify user when seats appear
 - Detects possible Railway site protection / captcha / block / non-JSON issues
 - Sends admin alerts on serious provider errors
+- Cloudflare Worker deployment with one-minute Cron Trigger
 - Vercel-ready Node.js API routes
 - Supabase schema included
 
@@ -36,6 +37,8 @@ supabase/
   001_migration.sql
 vercel.json       Safe Vercel config for all plans
 vercel.pro.json   Optional Vercel Cron every 5 minutes
+worker.js         Cloudflare Worker entrypoint
+wrangler.jsonc    Cloudflare Worker + every-minute cron config
 ```
 
 ## 1. Create Telegram bot
@@ -77,7 +80,34 @@ CRON_SECRET=
 
 `WEBHOOK_SECRET` and `CRON_SECRET` should be long random strings.
 
-## 4. Deploy to Vercel
+## 4. Deploy to Cloudflare Workers
+
+Install dependencies and upload the existing env values as Worker secrets:
+
+```bash
+npm install
+npx wrangler secret bulk .env.example
+npm run cf:deploy
+```
+
+The Worker exposes:
+
+```txt
+/api/bot
+/api/setWebhook?secret=WEBHOOK_SECRET
+/api/cron?secret=CRON_SECRET
+/api/health
+```
+
+`wrangler.jsonc` configures Cloudflare Cron as `* * * * *`, so active watches are checked every minute.
+
+After deployment, call:
+
+```txt
+https://your-worker.workers.dev/api/setWebhook?secret=WEBHOOK_SECRET
+```
+
+## 5. Deploy to Vercel
 
 ```bash
 npm install
@@ -92,7 +122,7 @@ APP_URL=https://your-project.vercel.app
 
 Then redeploy once.
 
-## 5. Set Telegram webhook
+## 6. Set Telegram webhook
 
 Open this URL in browser:
 
@@ -106,7 +136,7 @@ Expected response:
 { "ok": true }
 ```
 
-## 6. Cron / monitoring
+## 7. Cron / monitoring
 
 The route is ready:
 

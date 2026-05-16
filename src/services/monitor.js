@@ -3,19 +3,18 @@ import { dbGetActiveWatches, dbUpdateWatchResult, dbLog } from '../supabase.js';
 import { sendMessage, notifyAdmins } from '../telegram.js';
 import { searchTrains } from './railwayClient.js';
 import { trainResultHash, formatSearchResult, formatProtectionError } from './formatters.js';
+import { escapeHtml } from '../utils/text.js';
+import { formatDateUz } from '../utils/date.js';
 
 export async function runMonitor() {
   const watches = await dbGetActiveWatches(config.cronBatchSize);
   const summary = { checked: 0, notified: 0, failed: 0, protection: 0 };
+  const resultCache = new Map();
 
-  for (const watch of watches) {
+  await mapConcurrent(watches, config.monitorConcurrency, async (watch) => {
     summary.checked += 1;
     try {
-      const result = await searchTrains({
-        fromStation: { code: watch.from_station_code, name: watch.from_station_name },
-        toStation: { code: watch.to_station_code, name: watch.to_station_name },
-        travelDate: watch.travel_date
-      });
+      const result = await getCachedSearchResult(watch, resultCache);
       const hash = trainResultHash(result);
       const status = result.hasSeats ? `${result.totalFreeSeats} ta joy bor` : 'joy yo‘q';
       const now = new Date().toISOString();
@@ -35,20 +34,76 @@ export async function runMonitor() {
       }
     } catch (error) {
       summary.failed += 1;
-      if (error.code === 'RAILWAY_PROTECTION') {
+      const errorCode = error.code || 'UNKNOWN';
+      const previousErrorCode = parseLastErrorCode(watch.last_error);
+      if (errorCode === 'RAILWAY_PROTECTION') {
         summary.protection += 1;
-        await notifyAdmins(formatProtectionError(error));
+        if (previousErrorCode !== errorCode) await notifyAdmins(formatProtectionError(error));
       }
+      const lastError = JSON.stringify({ code: errorCode, message: error.message, details: error.details }).slice(0, 2000);
       await dbUpdateWatchResult(watch.id, {
         last_checked_at: new Date().toISOString(),
-        last_error: JSON.stringify({ code: error.code, message: error.message, details: error.details }).slice(0, 2000),
-        last_status: error.code === 'RAILWAY_PROTECTION' ? 'sayt himoyasi aniqlandi' : 'tekshirishda xatolik'
+        last_error: lastError,
+        last_status: errorCode === 'RAILWAY_PROTECTION' ? 'sayt himoyasi aniqlandi' : 'vaqtinchalik xatolik, kuzatuv davom etadi'
       });
-      await dbLog('ERROR', 'monitor', error.message, { code: error.code, details: error.details, watchId: watch.id });
+      if (previousErrorCode !== errorCode) {
+        await sendMessage(watch.telegram_id, formatWatchError(watch, errorCode)).catch(() => null);
+      }
+      await dbLog('ERROR', 'monitor', error.message, { code: errorCode, details: error.details, watchId: watch.id });
     }
-  }
+  });
 
   return summary;
+}
+
+function getCachedSearchResult(watch, resultCache) {
+  const key = [
+    watch.from_station_code,
+    watch.to_station_code,
+    watch.travel_date
+  ].join('|');
+  if (!resultCache.has(key)) {
+    resultCache.set(key, searchTrains({
+      fromStation: { code: watch.from_station_code, name: watch.from_station_name },
+      toStation: { code: watch.to_station_code, name: watch.to_station_name },
+      travelDate: watch.travel_date
+    }));
+  }
+  return resultCache.get(key);
+}
+
+async function mapConcurrent(items, concurrency, mapper) {
+  let index = 0;
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, items.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (index < items.length) {
+      const item = items[index];
+      index += 1;
+      await mapper(item);
+    }
+  }));
+}
+
+function parseLastErrorCode(lastError) {
+  if (!lastError) return null;
+  try {
+    return JSON.parse(lastError).code || null;
+  } catch {
+    return null;
+  }
+}
+
+function formatWatchError(watch, code) {
+  return [
+    '⚠️ <b>Kuzatuv davom etyapti</b>',
+    '',
+    `<b>${escapeHtml(watch.from_station_name)} → ${escapeHtml(watch.to_station_name)}</b>`,
+    `📅 ${formatDateUz(watch.travel_date)}`,
+    '',
+    code === 'RAILWAY_PROTECTION'
+      ? 'Railway saytida vaqtincha himoya yoki blok holati sezildi. Kuzatuvni o‘chirmadim, keyingi daqiqada yana tekshiraman.'
+      : 'Tekshiruvda vaqtinchalik xatolik chiqdi. Kuzatuvni o‘chirmadim, keyingi daqiqada yana urinaman.'
+  ].join('\n');
 }
 
 function canNotify(lastNotifiedAt) {

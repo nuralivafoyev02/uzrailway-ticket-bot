@@ -1,10 +1,12 @@
 import { config } from './config.js';
 import { chunkText } from './utils/text.js';
+import { fetchWithTimeout } from './utils/http.js';
 
 export async function telegram(method, payload = {}) {
   if (!config.botToken) throw new Error('BOT_TOKEN is missing');
-  const response = await fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${config.botToken}/${method}`, {
     method: 'POST',
+    timeoutMs: 10000,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
