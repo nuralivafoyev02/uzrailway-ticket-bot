@@ -41,7 +41,8 @@ async function handleMessage(message) {
   try {
     await dbUpsertUser(user);
     if (!text) return sendMessage(chatId, 'Faqat matnli buyruqlarni qabul qilaman 🙂', { replyMarkup: mainKeyboard() });
-    if (['/start', 'start'].includes(text.toLowerCase())) return start(chatId);
+    const startCommand = parseStartCommand(text);
+    if (startCommand) return handleStartCommand(chatId, user.id, startCommand.payload);
     if (['/cancel', '❌ bekor qilish'].includes(text.toLowerCase())) return cancel(chatId);
     if (isStatsCommand(text)) {
       if (isAdmin(user.id)) return showAdminStats(chatId);
@@ -117,6 +118,26 @@ async function start(chatId) {
     '',
     'Boshlash uchun <b>🎫 Bilet qidirish</b> tugmasini bosing.'
   ].join('\n'), { replyMarkup: mainKeyboard() });
+}
+
+async function handleStartCommand(chatId, userId, payload) {
+  const search = parseStartSearchPayload(payload);
+  if (!payload) return start(chatId);
+  if (!search) {
+    if (/^search_/i.test(payload)) {
+      await dbClearSession(userId).catch(() => null);
+      return sendMessage(chatId, [
+        'Landing page qidiruv havolasidagi formatni tushunmadim.',
+        '',
+        'To‘g‘ri format:',
+        '<code>/start search_TAS_BUX_20260524</code>'
+      ].join('\n'), { replyMarkup: mainKeyboard() });
+    }
+    return start(chatId);
+  }
+
+  await dbClearSession(userId).catch(() => null);
+  return performSearch(chatId, userId, search);
 }
 
 async function help(chatId) {
@@ -208,6 +229,57 @@ function parseQuickSearch(input) {
   const arrow = text.match(/^(.+?)\s*(?:->|→|—|-)\s*(.+?)\s+(\d{1,2}[./-]\d{1,2}(?:[./-]20\d{2})?|20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}|bugun|ertaga)$/i);
   if (arrow) return { from: arrow[1].trim(), to: arrow[2].trim(), date: arrow[3].trim() };
   return null;
+}
+
+function parseStartCommand(input) {
+  const text = String(input || '').trim();
+  if (text.toLowerCase() === 'start') return { payload: '' };
+  const match = text.match(/^\/start(?:@\w+)?(?:\s+(.+))?$/i);
+  if (!match) return null;
+  return { payload: (match[1] || '').trim() };
+}
+
+export function parseStartSearchPayload(input) {
+  const payload = decodeStartPayload(input);
+  const match = payload.match(/^search_([^_]+)_([^_]+)_(20\d{2})(\d{2})(\d{2})$/i);
+  if (!match) return null;
+
+  const date = compactDateToISO(match[3], match[4], match[5]);
+  if (!date) return null;
+
+  return {
+    from: normalizePayloadStation(match[1]),
+    to: normalizePayloadStation(match[2]),
+    date
+  };
+}
+
+function decodeStartPayload(input) {
+  const value = String(input || '').trim();
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizePayloadStation(value) {
+  return String(value || '').replace(/-/g, ' ').trim();
+}
+
+function compactDateToISO(year, month, day) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return `${year}-${month}-${day}`;
 }
 
 async function performSearch(chatId, userId, parsed) {

@@ -6,6 +6,7 @@ Telegram bot for checking Uzbekistan Railway ticket availability and monitoring 
 
 - `/start` menu with clean Uzbek UI
 - Search ticket availability by route and date
+- Telegram deep-link search payloads from landing pages (`/start search_FROM_TO_YYYYMMDD`)
 - Shows only trains with available seats and includes an official booking link
 - Paginates long Telegram results with next/back buttons
 - Save route monitoring and notify user when seats appear
@@ -168,6 +169,20 @@ Search:
 ```txt
 /q Toshkent|Samarqand|20.05.2026
 ```
+
+Landing page deep-link search:
+
+```txt
+/start search_TAS_BUX_20260524
+```
+
+Landing page URL example:
+
+```txt
+https://t.me/TicketRailwayBot?start=search_TAS_BUX_20260524
+```
+
+The payload format is `search_FROM_TO_YYYYMMDD`. The landing page may send short route codes like `TAS` and `BUX`, or Railway station codes like `2900000`.
 
 Watch:
 
